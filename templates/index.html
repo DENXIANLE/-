@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>城市导航程序</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        #map { width: 800px; height: 600px; float: left; }
+        body { font-family: Arial, sans-serif; }
+        #controls {
+            margin-bottom: 20px;
+        }
+        /* 增加输入框的样式 */
+        input[type="text"] {
+            width: 350px;
+            height: 20px;
+            font-size: 16px;
+            padding: 5px;
+            margin-top: 10px;
+        }
+        button {
+            margin-top: 5px;
+            padding: 5px 5px;
+            font-size: 14px;
+        }
+        #details {
+            float: left;
+            margin-left: 20px;
+             width: 540px; /* 设置信息面板的固定宽度 */
+        }
+        #attractionQuery {
+            margin-top: 20px;
+        }
+        #attractionInfo {
+            margin-top: 10px;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+
+<h1>城市导航程序</h1>
+
+<div id="controls">
+    <h2>输入目的地以规划最优路线</h2>
+    <input type="text" id="start" placeholder="起点 (大雁塔)">
+    <input type="text" id="midpoint" placeholder="中间点 (用“;”分隔多个中间点，如“大雁塔;大唐西市”)">
+    <input type="text" id="end" placeholder="终点 (大唐芙蓉园)">
+    <br>
+    <label for="mode">选择交通方式：</label>
+    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+       <select id="mode" onchange="handleTransportChange()" style="margin-right: 20px;">
+            <option value="walk">步行</option>
+            <option value="drive">驾车</option>
+            <option value="bus">公共交通</option>
+            <option value="fast">用时最短</option>
+        </select>
+        <div id="busOptions" style="display: none;">
+            <label for="busMode">选择出行方案：</label>
+            <select id="busMode">
+                <option value="economic">最经济</option>
+                <option value="fewestTransfers">最少换乘</option>
+                <option value="fewestWalks">最少步行</option>
+                <option value="quick">最快捷</option>
+            </select>
+        </div>
+    </div>
+    <button onclick="getOptimalPath()">规划最优路线</button>
+</div>
+
+<div id="map"></div>
+
+<div id="details">
+    <div id="info"></div>
+    <div id="result"></div>
+    <div id="distance"></div>
+    <div id="extraInfo"></div>
+    <div id="attractionQuery">
+        <h3>查询景点信息</h3>
+        <input type="text" id="attractionName" placeholder="输入景点名称">
+        <button onclick="queryAttraction()">查询</button>
+        <div id="attractionInfo"></div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<script>
+    // 处理交通方式变化
+    function handleTransportChange() {
+        const mode = document.getElementById('mode').value;
+        const busOptions = document.getElementById('busOptions');
+
+        if (mode === 'bus') {
+            busOptions.style.display = 'block';  // 显示公交选项
+        } else {
+            busOptions.style.display = 'none';  // 隐藏公交选项
+        }
+    }
+    const map = L.map('map').setView([34.218285, 108.964162], 13);
+    const markers = {};//存储景点标记
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+    }).addTo(map);
+
+    let routeLayer = null;
+
+    // 获取所有景点并显示在地图上
+    async function loadAttractions() {
+        const response = await fetch('/attractions');
+        const attractions = await response.json();
+
+        // 为每个景点添加标记，并将经纬度信息加入弹窗
+        attractions.forEach(attraction => {
+            const marker = L.marker([attraction.lat, attraction.lon]).addTo(map);
+            marker.bindPopup(`<b>${attraction.name}</b><br>纬度: ${attraction.lat}<br>经度: ${attraction.lon}<br>${attraction.description}`);
+            markers[attraction.name] = marker; // 存储标记以便后续使用
+        });
+    }
+
+    loadAttractions(); // 加载并显示景点
+
+    async function getOptimalPath() {
+        const start = document.getElementById('start').value;
+        const end = document.getElementById('end').value;
+        const midpoint = document.getElementById('midpoint').value; // 获取中间点的内容
+        const mode = document.getElementById('mode').value;  // 获取用户选择的交通方式
+
+        // 处理多个中间点，分割成数组并去除空格
+        const midpointsArray = midpoint.split(';').map(item => item.trim()).filter(item => item); // 使用";"作为分隔符
+
+        let busMode = null;
+        if (mode === 'bus') {
+        busMode = document.getElementById('busMode').value;  // 获取公交方案
+        }
+
+        const response = await fetch('/optimal_path', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start, end, midpoints: midpointsArray, mode, busMode})  // 将交通方式和中间点数组传递给后端
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            alert(`错误: ${errorData.error || errorData.message}`); // 弹窗显示错误信息
+            return;
+        }
+
+        const data = await response.json();
+
+        if (routeLayer) {
+            map.removeLayer(routeLayer);
+        }
+
+        // 显示最优路径
+        const latlngs = data.path.map(p => [p.lat, p.lon]);
+        routeLayer = L.polyline(latlngs, { color: data.color, weight: 4 }).addTo(map);
+
+
+        // 缩放地图以适应路线
+        map.fitBounds(routeLayer.getBounds());
+
+        // 显示途经地点和预计时间
+        const totalSeconds = data.duration;
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        document.getElementById('info').innerText = `预计时间: ${hours} 小时 ${minutes} 分钟 ${seconds} 秒`;
+        document.getElementById('result').innerText = `途经地点（有序）: ${data.waypoints.join(', ')}`;
+
+        // 显示总距离
+        const distance = data.distance;
+        document.getElementById('distance').innerText = `总距离: ${distance} 米`;
+
+        if (data.color === 'red') {  // 判断交通方式为公共交通
+            const taxiCost = data.taxi_cost || '未计算';
+            const busCost = data.bus_cost || '未计算';
+            const walkingDistance = data.walking_distance || '未计算';
+            const busName = data.bus_name || '未提供';
+            const huanchen = data.huanchen || '未提供';
+
+            document.getElementById('extraInfo').innerHTML = `
+                <p>出租车费用: ${taxiCost} 元</p>
+                <p>公交费用: ${busCost} 元</p>
+                <p>步行距离: ${walkingDistance} 米</p>
+                <p>公交线路名称: ${busName}</p>
+                <p>换乘信息: ${huanchen}</p>
+            `;
+        } else {
+            document.getElementById('extraInfo').innerHTML = ''; // 清空额外信息
+        }
+
+    }
+
+    async function queryAttraction() {
+        const name = document.getElementById('attractionName').value;
+        const response = await fetch(`/attractions/${name}`);
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            alert(errorData.message); // 弹窗显示错误信息
+            return;
+        }
+
+
+        const attraction = await response.json();
+
+        const infoDiv = document.getElementById('attractionInfo');
+        if (attraction) {
+            infoDiv.innerHTML = `
+                <h4>${attraction.name} (${attraction.code})</h4>
+                <p>${attraction.description}</p>
+                <p>${attraction.price}</p>
+                <a href="${attraction.link}" target="_blank">查看景区详情</a>
+            `;
+        // 找到并打开对应的标记
+            const marker = markers[attraction.name];
+            if (marker) {
+                map.setView(marker.getLatLng(), 15); // 设置视图到该景点
+                marker.openPopup(); // 打开弹窗显示信息
+            }
+        } else {
+            infoDiv.innerHTML = `<p>未找到该景点。</p>`;
+        }
+    }
+</script>
+
+</body>
+</html>
